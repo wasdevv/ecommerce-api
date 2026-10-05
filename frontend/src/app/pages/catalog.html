@@ -1,0 +1,76 @@
+<div class="grid gap-8">
+  <div class="grid gap-4 md:grid-cols-[1fr_auto] md:items-end">
+    <div>
+      <h1 class="text-3xl font-semibold tracking-tight md:text-4xl">Everyday gear, in stock</h1>
+      <p class="mt-2 max-w-[65ch] text-zinc-600 dark:text-zinc-400">Prices and stock come live from the API. Free shipping from $100.</p>
+    </div>
+    <div class="grid grid-cols-[1fr_auto] gap-2">
+      <label class="relative">
+        <span class="sr-only">Search products</span>
+        <ng-icon name="phosphorMagnifyingGlass" size="18" class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
+        <input [value]="term()" (input)="term.set($any($event.target).value)" placeholder="Search" class="field pl-9 md:w-64" />
+      </label>
+      <label>
+        <span class="sr-only">Sort</span>
+        <select [value]="sort()" (change)="set({ sort: $any($event.target).value })" class="field">
+          <option value="newest">Newest</option>
+          <option value="price_asc">Price: low to high</option>
+          <option value="price_desc">Price: high to low</option>
+        </select>
+      </label>
+    </div>
+  </div>
+
+  <div class="flex flex-wrap gap-2" role="group" aria-label="Categories">
+    @for (c of categoryChips(); track c.slug) {
+      <button type="button" (click)="set({ category: c.slug })" [attr.aria-pressed]="category() === c.slug"
+        class="rounded-full border px-3.5 py-1.5 text-sm transition"
+        [class]="category() === c.slug ? 'border-accent bg-accent text-white' : 'border-zinc-300 hover:border-zinc-500 dark:border-zinc-700'">
+        {{ c.name }}
+      </button>
+    }
+  </div>
+
+  <app-error-note [error]="error()" [retryable]="true" (retry)="products.reload()" />
+
+  @if (products.isLoading() && !products.hasValue()) {
+    <div class="grid grid-cols-2 gap-x-4 gap-y-8 md:grid-cols-3 lg:grid-cols-4" aria-busy="true">
+      @for (i of [1, 2, 3, 4, 5, 6, 7, 8]; track i) {
+        <div class="grid gap-3"><div class="skeleton aspect-[4/3]"></div><div class="skeleton h-4 w-3/4"></div><div class="skeleton h-4 w-1/3"></div></div>
+      }
+    </div>
+  } @else if (products.hasValue()) {
+    @let page = products.value();
+    @if (page.data.length === 0) {
+      <div class="rounded-xl border border-dashed border-zinc-300 py-16 text-center dark:border-zinc-700" data-testid="empty">
+        <p class="font-medium">Nothing matches that search.</p>
+        <button type="button" (click)="clear()" class="mt-3 text-sm text-accent underline">Clear filters</button>
+      </div>
+    } @else {
+      <ul class="grid grid-cols-2 gap-x-4 gap-y-8 md:grid-cols-3 lg:grid-cols-4" [class.opacity-60]="products.isLoading()">
+        @for (p of page.data; track p.id) {
+          <li>
+            <a [routerLink]="['/products', p.slug]" class="group grid gap-3">
+              <img [src]="p.image_url" alt="" loading="lazy" width="600" height="450"
+                class="aspect-[4/3] w-full rounded-xl bg-zinc-200 object-cover transition group-hover:opacity-90 dark:bg-zinc-800" />
+              <div>
+                <p class="font-medium leading-snug group-hover:underline">{{ p.name }}</p>
+                <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+                  {{ p.price_cents | money }}
+                  @if (p.stock === 0) { <span class="ml-2 text-red-700 dark:text-red-400">Sold out</span> }
+                </p>
+              </div>
+            </a>
+          </li>
+        }
+      </ul>
+      @if (page.meta.last_page > 1) {
+        <nav class="flex items-center justify-center gap-3" aria-label="Pagination">
+          <button type="button" class="btn-ghost" [disabled]="page.meta.current_page === 1" (click)="set({ page: page.meta.current_page - 1 })">Previous</button>
+          <span class="text-sm text-zinc-600 dark:text-zinc-400">Page {{ page.meta.current_page }} of {{ page.meta.last_page }}</span>
+          <button type="button" class="btn-ghost" [disabled]="page.meta.current_page === page.meta.last_page" (click)="set({ page: page.meta.current_page + 1 })">Next</button>
+        </nav>
+      }
+    }
+  }
+</div>

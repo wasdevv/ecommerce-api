@@ -1,0 +1,25 @@
+<div class="flex min-h-[100dvh] flex-col">
+  <header class="sticky top-0 z-10 border-b border-zinc-200 bg-zinc-50/90 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/90">
+    <nav class="mx-auto flex h-16 max-w-6xl items-center gap-2 px-4">
+      <a routerLink="/" class="mr-auto text-base font-semibold tracking-tight">Kestrel Supply</a>
+      @if (auth.user()) {
+        <a routerLink="/orders" routerLinkActive="!text-accent font-medium" class="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">
+          <ng-icon name="phosphorPackage" size="18" /> <span class="hidden sm:inline">Orders</span>
+        </a>
+        <a routerLink="/cart" routerLinkActive="!text-accent font-medium" class="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">
+          <ng-icon name="phosphorShoppingBag" size="18" /> <span class="hidden sm:inline">Cart</span>
+        </a>
+        <button type="button" (click)="logout()" class="btn-ghost px-3 py-2" aria-label="Sign out"><ng-icon name="phosphorSignOut" size="18" /></button>
+      } @else if (auth.ready()) {
+        <a routerLink="/login" class="rounded-lg px-3 py-2 text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">Sign in</a>
+        <a routerLink="/register" class="btn-primary px-3 py-2">Create account</a>
+      }
+    </nav>
+  </header>
+  <main class="mx-auto w-full max-w-6xl flex-1 px-4 py-8 md:py-12">
+    <router-outlet />
+  </main>
+  <footer class="border-t border-zinc-200 py-6 text-center text-xs text-zinc-500 dark:border-zinc-800">
+    Demo store. Laravel API + Angular. Payments run in Stripe test or local mode.
+  </footer>
+</div>

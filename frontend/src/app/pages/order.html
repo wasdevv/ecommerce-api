@@ -1,0 +1,49 @@
+<div class="grid gap-6">
+  <a routerLink="/orders" class="inline-flex items-center gap-1.5 text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-400"><ng-icon name="phosphorArrowLeft" size="16" /> Orders</a>
+
+  @if (order.isLoading() && !order.hasValue()) {
+    <div class="skeleton h-64" aria-busy="true"></div>
+  } @else if (loadError()?.status === 403 || loadError()?.status === 404) {
+    <p class="py-24 text-center text-zinc-500">Order not found.</p>
+  } @else if (loadError()) {
+    <app-error-note [error]="loadError()" [retryable]="true" (retry)="order.reload()" />
+  } @else if (order.hasValue()) {
+    @let o = order.value().data;
+    <div class="flex flex-wrap items-center gap-3">
+      <h1 class="text-2xl font-semibold tracking-tight">{{ o.number }}</h1>
+      <app-status-badge [status]="o.status" />
+    </div>
+    @if (awaitingStripe()) {
+      <p class="text-sm text-zinc-600 dark:text-zinc-400" aria-live="polite">Waiting for the payment confirmation from Stripe.</p>
+    }
+    <app-error-note [error]="actionError()" />
+
+    <div class="grid gap-8 lg:grid-cols-[2fr_1fr]">
+      <ul class="divide-y divide-zinc-200 dark:divide-zinc-800">
+        @for (item of o.items; track item.product_id) {
+          <li class="flex justify-between gap-4 py-3 text-sm">
+            <span>{{ item.product_name }} <span class="text-zinc-500">x {{ item.quantity }}</span></span>
+            <span>{{ item.line_total_cents | money: o.currency }}</span>
+          </li>
+        }
+      </ul>
+      <aside class="grid h-fit gap-5 rounded-xl border border-zinc-200 p-6 dark:border-zinc-800">
+        <app-totals [subtotal]="o.subtotal_cents" [shipping]="o.shipping_cents" [total]="o.total_cents" [currency]="o.currency" />
+        <address class="text-sm not-italic text-zinc-600 dark:text-zinc-400">
+          {{ o.shipping_address.name }}<br />{{ o.shipping_address.street }}<br />{{ o.shipping_address.city }} {{ o.shipping_address.zip }}, {{ o.shipping_address.country }}
+        </address>
+        @if (o.status === 'pending') {
+          <div class="grid gap-2">
+            @if (localMode()) {
+              <p class="text-xs text-zinc-500">Local payment mode: no Stripe key is configured on the API.</p>
+              <button type="button" (click)="simulate()" [disabled]="!!busy()" class="btn-primary">{{ busy() === 'simulate' ? 'Confirming' : 'Simulate payment' }}</button>
+            } @else {
+              <button type="button" (click)="pay()" [disabled]="!!busy()" class="btn-primary">{{ busy() === 'pay' ? 'Opening checkout' : 'Pay now' }}</button>
+            }
+            <button type="button" (click)="cancel()" [disabled]="!!busy()" class="btn-ghost">Cancel order</button>
+          </div>
+        }
+      </aside>
+    </div>
+  }
+</div>

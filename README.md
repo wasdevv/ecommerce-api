@@ -1,16 +1,16 @@
 # E-commerce API
 
-A store backend in **Laravel 13 / PHP 8.3** with a **React 19** storefront: catalog, JWT auth, a server-side cart, a transactional checkout that can't oversell, and payments through **Stripe Checkout** with a verified, idempotent webhook. PostgreSQL, Redis for cache/queue/rate limiting, everything runs with one `docker compose up`.
+A store backend in **Laravel 13 / PHP 8.3** with an **Angular 22** storefront: catalog, JWT auth, a server-side cart, a transactional checkout that can't oversell, and payments through **Stripe Checkout** with a verified, idempotent webhook. PostgreSQL, Redis for cache/queue/rate limiting, everything runs with one `docker compose up`.
 
 ```
-frontend/   React 19 + Vite + Tailwind v4, served by nginx (which also proxies /api)
+frontend/   Angular 22 (standalone, zoneless, signals) + Tailwind v4, served by nginx (which also proxies /api)
 backend/    Laravel 13 API, /api/v1, OpenAPI spec in backend/openapi.yaml
 compose.yaml  postgres · redis · migrate (one-shot) · api (FrankenPHP) · worker · web
 ```
 
 ## Run it
 
-Requires Docker only.
+Requires Docker only. For frontend work outside Docker: Node 22.22.3+ or 24, `cd frontend && npm ci && npm start` (dev server on :3000, proxying `/api` to :8000).
 
 ```bash
 cp .env.example .env
@@ -40,8 +40,11 @@ To use Stripe test mode: set `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET`, th
 ## Tests
 
 ```bash
-docker compose --profile test run --rm test
+docker compose --profile test run --rm test          # backend: PHPUnit against PostgreSQL
+cd frontend && npm ci && npm run test:ci             # frontend: Jasmine in headless Chrome via Karma
 ```
+
+### Backend
 
 43 PHPUnit tests run against **real PostgreSQL** (not SQLite: row locks and `ilike` are part of what they prove). Line coverage measured with PCOV is **97%**; CI enforces a floor of 85%.
 
@@ -54,7 +57,18 @@ What they pin down, beyond the happy paths:
 - **Auth.** Expired, garbage and revoked (post-logout) tokens are 401; a customer can't reach admin routes or someone else's order; `role` can't be self-assigned at signup.
 - **Stripe adapter.** Exercised through the real SDK with only the HTTP transport swapped, asserting the exact session payload (amounts in cents, shipping line, idempotency key).
 
-CI (`.github/workflows/ci.yml`): Pint, tests with coverage, OpenAPI lint, frontend build, and a `docker compose build`.
+### Frontend
+
+34 Jasmine specs run by Karma in headless Chrome, with line coverage at **97%**. They go through the real router, the real HTTP interceptor and the real components; only the network is faked (`HttpTestingController`), so each spec asserts the exact request the UI sends and how it renders the API's answer:
+
+- **Session:** the bearer token goes on every call, a 401 on a token we sent clears the session, the guard sends anonymous users to `/login?returnUrl=...`, and login never follows a `returnUrl` to another site.
+- **Money stays the server's:** checkout posts only the address (no totals, no prices), and cart totals render the numbers the API computed, also after a refused quantity change.
+- **Errors where they belong:** 422 validation messages sit under their field, business-rule refusals (`insufficient_stock`, `order_not_cancellable`) show as a banner, and when the network is down the page offers a retry.
+- **Payment:** with Stripe configured the buyer is redirected to the hosted checkout. In local mode the simulated payment is offered. Back from Stripe, the order polls until the webhook lands, then stops (`jasmine.clock`).
+
+The specs caught two real bugs before anything shipped: the route guard called `inject()` after an `await` (outside the injection context, so protected routes never redirected to login), and a resource in an error state threw when read, which would have crashed the catalog instead of showing its retry.
+
+CI (`.github/workflows/ci.yml`): Pint, backend tests with coverage, OpenAPI lint, Karma specs and frontend build, and a `docker compose build`.
 
 ## Design decisions
 
@@ -70,7 +84,9 @@ CI (`.github/workflows/ci.yml`): Pint, tests with coverage, OpenAPI lint, fronte
 
 **Auth** is a single mechanism: JWT (`php-open-source-saver/jwt-auth`), 60-minute TTL, refresh endpoint, logout blacklists the token in Redis. Rate limits: 10/min on login/register per IP, 10/min on checkout and payment start per user, 120/min elsewhere.
 
-**Same origin.** nginx serves the SPA and proxies `/api` to the API, so there's no CORS surface and the token never crosses origins. Vite's dev server does the same proxying.
+**Same origin.** nginx serves the SPA and proxies `/api` to the API, so there's no CORS surface and the token never crosses origins. `ng serve` does the same through `proxy.conf.json`.
+
+**Frontend shape.** Standalone components, signals and zoneless change detection. Reads use `httpResource`, so loading, error and retry come from the resource, not hand-written flags. Writes go through `HttpClient`, and every cart mutation renders the cart the server answers with. One functional interceptor adds the token and handles 401; one guard protects the account pages; routes are lazy-loaded (initial bundle ~86 kB gzipped). The URL holds the catalog filters, so a search survives refresh and can be shared.
 
 ## API
 
