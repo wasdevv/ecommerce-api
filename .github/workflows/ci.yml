@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push: { branches: [main] }
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: backend } }
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: ecommerce_test
+          POSTGRES_USER: ecommerce
+          POSTGRES_PASSWORD: ecommerce
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ecommerce" --health-interval 5s --health-retries 10
+    env:
+      DB_HOST: 127.0.0.1
+      DB_USERNAME: ecommerce
+      DB_PASSWORD: ecommerce
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          extensions: pdo_pgsql, pcntl, intl
+          coverage: pcov
+      - uses: actions/cache@v4
+        with:
+          path: backend/vendor
+          key: vendor-${{ hashFiles('backend/composer.lock') }}
+      - run: composer install --no-interaction --prefer-dist --no-progress
+      - run: touch .env
+      - run: vendor/bin/pint --test
+      - run: php artisan test --coverage --min=85
+
+  openapi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npx -y @redocly/cli@2 lint backend/openapi.yaml
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: frontend } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cp .env.example .env && sed -i 's/^APP_KEY=$/APP_KEY=ci/; s/^JWT_SECRET=$/JWT_SECRET=ci/' .env
+      - run: docker compose config --quiet
+      - run: docker compose build

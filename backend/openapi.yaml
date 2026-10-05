@@ -1,0 +1,400 @@
+openapi: 3.1.0
+info:
+  title: E-commerce API
+  version: 1.0.0
+  license: { name: MIT, identifier: MIT }
+  description: |
+    JSON API under `/api/v1`. Auth is a JWT in `Authorization: Bearer <token>` (60 min TTL, revoked on logout).
+    Money is always integer cents. Errors: 401 unauthenticated, 403 forbidden, 404 not found,
+    422 validation (`errors`) or business rule (`code` + `details`), 429 rate limited.
+servers:
+  - url: /api/v1
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer, bearerFormat: JWT }
+  parameters:
+    OrderId: { name: order, in: path, required: true, schema: { type: integer } }
+    ProductId: { name: productId, in: path, required: true, schema: { type: integer } }
+  schemas:
+    User:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        email: { type: string, format: email }
+        role: { type: string, enum: [admin, customer] }
+    Token:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            token: { type: string }
+            token_type: { type: string, example: bearer }
+            expires_in: { type: integer, example: 3600 }
+            user: { $ref: '#/components/schemas/User' }
+    Category:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        slug: { type: string }
+    Product:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        slug: { type: string }
+        description: { type: string }
+        price_cents: { type: integer, example: 12900 }
+        stock: { type: integer }
+        image_url: { type: [string, 'null'] }
+        is_active: { type: boolean }
+        category: { $ref: '#/components/schemas/Category' }
+    ProductInput:
+      type: object
+      required: [category_id, name, slug, description, price_cents, stock]
+      properties:
+        category_id: { type: integer }
+        name: { type: string }
+        slug: { type: string }
+        description: { type: string }
+        price_cents: { type: integer, minimum: 1 }
+        stock: { type: integer, minimum: 0 }
+        image_url: { type: [string, 'null'], format: uri }
+        is_active: { type: boolean }
+    Cart:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            items:
+              type: array
+              items:
+                type: object
+                properties:
+                  product: { $ref: '#/components/schemas/Product' }
+                  quantity: { type: integer }
+                  line_total_cents: { type: integer }
+            subtotal_cents: { type: integer }
+            shipping_cents: { type: integer }
+            total_cents: { type: integer }
+            currency: { type: string, example: usd }
+    Address:
+      type: object
+      required: [name, street, city, zip, country]
+      properties:
+        name: { type: string }
+        street: { type: string }
+        city: { type: string }
+        zip: { type: string }
+        country: { type: string, minLength: 2, maxLength: 2, example: BR }
+    Order:
+      type: object
+      properties:
+        id: { type: integer }
+        number: { type: string, example: ORD-20261005-000001 }
+        status: { type: string, enum: [pending, paid, cancelled] }
+        subtotal_cents: { type: integer }
+        shipping_cents: { type: integer }
+        total_cents: { type: integer }
+        currency: { type: string }
+        shipping_address: { $ref: '#/components/schemas/Address' }
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              product_id: { type: integer }
+              product_name: { type: string, description: Snapshot taken at checkout }
+              unit_price_cents: { type: integer }
+              quantity: { type: integer }
+              line_total_cents: { type: integer }
+        created_at: { type: string, format: date-time }
+        paid_at: { type: [string, 'null'], format: date-time }
+        cancelled_at: { type: [string, 'null'], format: date-time }
+    PageMeta:
+      type: object
+      properties:
+        current_page: { type: integer }
+        last_page: { type: integer }
+        per_page: { type: integer }
+        total: { type: integer }
+    BusinessError:
+      type: object
+      properties:
+        message: { type: string }
+        code: { type: string, enum: [cart_empty, insufficient_stock, order_not_cancellable, order_not_payable] }
+        details: { type: object }
+      example:
+        message: Some items are no longer available in the requested quantity.
+        code: insufficient_stock
+        details: { items: [{ product_id: 3, requested: 2, available: 1 }] }
+    ValidationError:
+      type: object
+      properties:
+        message: { type: string }
+        errors: { type: object, additionalProperties: { type: array, items: { type: string } } }
+  responses:
+    Unauthenticated: { description: 'Missing, invalid, expired or revoked token' }
+    Forbidden: { description: Authenticated but not allowed }
+    NotFound: { description: Not found }
+    Invalid:
+      description: Validation failed or a business rule refused the request
+      content:
+        application/json:
+          schema:
+            oneOf: [{ $ref: '#/components/schemas/ValidationError' }, { $ref: '#/components/schemas/BusinessError' }]
+    OrderOk:
+      description: Order
+      content:
+        application/json:
+          schema: { type: object, properties: { data: { $ref: '#/components/schemas/Order' } } }
+security: []
+paths:
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Create a customer account and return a token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password, password_confirmation]
+              properties:
+                name: { type: string }
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8 }
+                password_confirmation: { type: string }
+      responses:
+        '201': { description: Registered, content: { application/json: { schema: { $ref: '#/components/schemas/Token' } } } }
+        '422': { $ref: '#/components/responses/Invalid' }
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Exchange credentials for a token (10 req/min per IP)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        '200': { description: Logged in, content: { application/json: { schema: { $ref: '#/components/schemas/Token' } } } }
+        '401': { description: Invalid credentials }
+  /auth/me:
+    get:
+      tags: [Auth]
+      security: [{ bearer: [] }]
+      summary: Current user
+      responses:
+        '200': { description: User, content: { application/json: { schema: { type: object, properties: { data: { $ref: '#/components/schemas/User' } } } } } }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      security: [{ bearer: [] }]
+      summary: Swap the current token for a fresh one
+      responses:
+        '200': { description: New token, content: { application/json: { schema: { $ref: '#/components/schemas/Token' } } } }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+  /auth/logout:
+    post:
+      tags: [Auth]
+      security: [{ bearer: [] }]
+      summary: Revoke the current token
+      responses:
+        '204': { description: Revoked }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+  /categories:
+    get:
+      tags: [Catalog]
+      summary: All categories
+      responses:
+        '200': { description: Categories, content: { application/json: { schema: { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/Category' } } } } } } }
+  /products:
+    get:
+      tags: [Catalog]
+      summary: Active products, paginated
+      parameters:
+        - { name: q, in: query, schema: { type: string }, description: Searches name and description }
+        - { name: category, in: query, schema: { type: string }, description: Category slug }
+        - { name: min_price, in: query, schema: { type: integer }, description: Cents }
+        - { name: max_price, in: query, schema: { type: integer }, description: Cents }
+        - { name: sort, in: query, schema: { type: string, enum: [newest, price_asc, price_desc] } }
+        - { name: per_page, in: query, schema: { type: integer, maximum: 50, default: 12 } }
+        - { name: page, in: query, schema: { type: integer } }
+      responses:
+        '200':
+          description: Page of products
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Product' } }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+                  links: { type: object }
+        '422': { $ref: '#/components/responses/Invalid' }
+  /products/{slug}:
+    get:
+      tags: [Catalog]
+      summary: One active product
+      parameters: [{ name: slug, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Product, content: { application/json: { schema: { type: object, properties: { data: { $ref: '#/components/schemas/Product' } } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /cart:
+    get:
+      tags: [Cart]
+      security: [{ bearer: [] }]
+      summary: The user's cart with server-computed totals
+      responses:
+        '200': { description: Cart, content: { application/json: { schema: { $ref: '#/components/schemas/Cart' } } } }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+  /cart/items/{productId}:
+    parameters: [{ $ref: '#/components/parameters/ProductId' }]
+    put:
+      tags: [Cart]
+      security: [{ bearer: [] }]
+      summary: Set the quantity of a product (idempotent)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [quantity], properties: { quantity: { type: integer, minimum: 1, maximum: 99 } } } } }
+      responses:
+        '200': { description: Updated cart, content: { application/json: { schema: { $ref: '#/components/schemas/Cart' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Invalid' }
+    delete:
+      tags: [Cart]
+      security: [{ bearer: [] }]
+      summary: Remove a product from the cart
+      responses:
+        '200': { description: Updated cart, content: { application/json: { schema: { $ref: '#/components/schemas/Cart' } } } }
+  /orders:
+    get:
+      tags: [Orders]
+      security: [{ bearer: [] }]
+      summary: The user's orders, newest first
+      parameters: [{ name: page, in: query, schema: { type: integer } }]
+      responses:
+        '200':
+          description: Page of orders
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Order' } }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+    post:
+      tags: [Orders]
+      security: [{ bearer: [] }]
+      summary: Check out the cart. Prices, shipping and totals are computed by the server.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [shipping_address], properties: { shipping_address: { $ref: '#/components/schemas/Address' } } } } }
+      responses:
+        '201': { $ref: '#/components/responses/OrderOk' }
+        '422': { $ref: '#/components/responses/Invalid' }
+        '429': { description: Too many checkouts }
+  /orders/{order}:
+    get:
+      tags: [Orders]
+      security: [{ bearer: [] }]
+      summary: One order (owner or admin)
+      parameters: [{ $ref: '#/components/parameters/OrderId' }]
+      responses:
+        '200': { $ref: '#/components/responses/OrderOk' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /orders/{order}/cancel:
+    post:
+      tags: [Orders]
+      security: [{ bearer: [] }]
+      summary: Cancel a pending order and restock its items
+      parameters: [{ $ref: '#/components/parameters/OrderId' }]
+      responses:
+        '200': { $ref: '#/components/responses/OrderOk' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Invalid' }
+  /orders/{order}/payments:
+    post:
+      tags: [Payments]
+      security: [{ bearer: [] }]
+      summary: Start a payment. With Stripe configured, returns a hosted Checkout URL.
+      parameters: [{ $ref: '#/components/parameters/OrderId' }]
+      responses:
+        '201':
+          description: Payment started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      provider: { type: string, enum: [stripe, fake] }
+                      reference: { type: string }
+                      checkout_url: { type: [string, 'null'], description: 'null in local mode' }
+        '422': { $ref: '#/components/responses/Invalid' }
+        '503': { description: Production without Stripe keys refuses instead of faking }
+  /orders/{order}/payments/simulate:
+    post:
+      tags: [Payments]
+      security: [{ bearer: [] }]
+      summary: Local mode only. Confirms the pending payment as the webhook would.
+      parameters: [{ $ref: '#/components/parameters/OrderId' }]
+      responses:
+        '200': { $ref: '#/components/responses/OrderOk' }
+        '404': { description: 'Not in local mode, or no pending payment' }
+  /webhooks/stripe:
+    post:
+      tags: [Payments]
+      summary: Stripe webhook. Signature verified over the raw body; events are deduplicated by id.
+      parameters: [{ name: Stripe-Signature, in: header, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      responses:
+        '200': { description: Received (or duplicate) }
+        '400': { description: Invalid signature }
+  /admin/products:
+    get:
+      tags: [Admin]
+      security: [{ bearer: [] }]
+      summary: All products, inactive included
+      responses:
+        '200': { description: Page of products }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Admin]
+      security: [{ bearer: [] }]
+      summary: Create a product
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ProductInput' } } } }
+      responses:
+        '201': { description: Created }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Invalid' }
+  /admin/products/{product}:
+    parameters: [{ name: product, in: path, required: true, schema: { type: integer } }]
+    patch:
+      tags: [Admin]
+      security: [{ bearer: [] }]
+      summary: Update any subset of fields
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ProductInput' } } } }
+      responses:
+        '200': { description: Updated }
+        '422': { $ref: '#/components/responses/Invalid' }
+    delete:
+      tags: [Admin]
+      security: [{ bearer: [] }]
+      summary: Soft-delete (orders keep referencing it)
+      responses:
+        '204': { description: Deleted }

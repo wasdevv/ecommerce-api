@@ -1,0 +1,102 @@
+# docker compose up --build   → storefront on http://localhost:3000, API on http://localhost:8000
+name: ecommerce
+
+x-backend-env: &backend-env
+  # "local" enables the simulated payment flow when no Stripe key is set; a real deploy uses production + Stripe.
+  APP_ENV: ${APP_ENV:-local}
+  APP_DEBUG: "false"
+  APP_KEY: ${APP_KEY:?run the key commands in README}
+  JWT_SECRET: ${JWT_SECRET:?run the key commands in README}
+  APP_URL: http://localhost:8000
+  FRONTEND_URL: http://localhost:3000
+  LOG_CHANNEL: stderr
+  DB_CONNECTION: pgsql
+  DB_HOST: postgres
+  DB_DATABASE: ecommerce
+  DB_USERNAME: ecommerce
+  DB_PASSWORD: ${DB_PASSWORD:-ecommerce}
+  REDIS_HOST: redis
+  CACHE_STORE: redis
+  QUEUE_CONNECTION: redis
+  SESSION_DRIVER: array
+  MAIL_MAILER: log
+  STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+  STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+  DEMO_PASSWORD: ${DEMO_PASSWORD:-}
+
+x-backend: &backend
+  image: ecommerce-api
+  pull_policy: never # built once by the migrate service, shared by api and worker
+  environment: *backend-env
+  depends_on:
+    postgres: { condition: service_healthy }
+    redis: { condition: service_healthy }
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ecommerce
+      POSTGRES_USER: ecommerce
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-ecommerce}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ecommerce -d ecommerce"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redis:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+  # One-shot: migrations run once here, never concurrently from each api replica.
+  migrate:
+    <<: *backend
+    build: { context: ./backend, target: prod }
+    restart: "no"
+    command: ["sh", "-c", "php artisan migrate --force && php artisan db:seed --force"]
+
+  api:
+    <<: *backend
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    ports: ["8000:8000"]
+    restart: unless-stopped
+
+  worker:
+    <<: *backend
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    command: ["php", "artisan", "queue:work", "--tries=3", "--max-time=3600"]
+    healthcheck: { disable: true }
+    restart: unless-stopped
+
+  web:
+    build: ./frontend
+    depends_on:
+      api: { condition: service_healthy }
+    ports: ["3000:80"]
+    restart: unless-stopped
+
+  # docker compose run --rm test
+  test:
+    build: { context: ./backend, target: dev }
+    profiles: [test]
+    environment:
+      DB_HOST: postgres
+      DB_USERNAME: ecommerce
+      DB_PASSWORD: ${DB_PASSWORD:-ecommerce}
+    depends_on:
+      postgres: { condition: service_healthy }
+    command: ["php", "artisan", "test"]
+
+volumes:
+  postgres:
+  redis:
